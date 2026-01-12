@@ -31,53 +31,21 @@ jobs:
       - name: Clone makeself repository
         run: git clone https://github.com/megastep/makeself.git
 
-      - name: Download latest Passwall files
+      - name: Debug GitHub release API
         run: |
           set -e
       
           API="https://api.github.com/repos/xiaorouji/openwrt-passwall/releases/latest"
-          mkdir -p downloads
-          cd downloads
       
-          echo "Fetching release metadata (authenticated)..."
-          curl -s \
+          echo "=== Curl without auth ==="
+          curl -i "$API" || true
+      
+          echo
+          echo "=== Curl with GITHUB_TOKEN ==="
+          curl -i \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
-            "$API" > release.json
-      
-          echo "===== Raw GitHub API response ====="
-          cat release.json
-          echo "==================================="
-      
-          # 如果不是 release 数据，直接失败并给出明确错误
-          if ! jq -e '.assets' release.json > /dev/null; then
-            echo "❌ GitHub API did not return release assets"
-            echo "Likely reason: API rate limit or permission issue"
-            exit 1
-          fi
-      
-          echo "Available assets:"
-          jq -r '.assets[].name' release.json
-      
-          X86_URL=$(jq -r '.assets[] | select(.name | test("x86_64.*\\.zip")) | .browser_download_url' release.json)
-          A53_URL=$(jq -r '.assets[] | select(.name | test("aarch64.*\\.zip")) | .browser_download_url' release.json)
-          LUCI_URLS=$(jq -r '.assets[] | select(.name | test("luci-.*passwall.*\\.ipk")) | .browser_download_url' release.json)
-      
-          echo "X86_URL=$X86_URL"
-          echo "A53_URL=$A53_URL"
-          echo "LUCI_URLS=$LUCI_URLS"
-      
-          [ -z "$X86_URL" ] && echo "❌ x86_64 package not found" && exit 1
-          [ -z "$A53_URL" ] && echo "❌ aarch64 package not found" && exit 1
-      
-          curl -L -O "$X86_URL"
-          curl -L -O "$A53_URL"
-      
-          for url in $LUCI_URLS; do
-            curl -L -O "$url"
-          done
-
-
+            "$API" || true
       
       - name: Organize files for x86_64
         run: |
