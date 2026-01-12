@@ -34,16 +34,22 @@ jobs:
           API="https://api.github.com/repos/xiaorouji/openwrt-passwall/releases/latest"
           mkdir -p downloads
           cd downloads
-          
-          echo "Fetching release metadata..."
-          curl -s "$API" > release.json
+      
+          echo "Fetching release metadata (with auth)..."
+          curl -s \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "$API" > release.json
+      
+          echo "Raw response:"
+          cat release.json
       
           echo "Available assets:"
-          jq -r '.assets[].name' release.json
+          jq -r '.assets // [] | .[].name' release.json
       
-          X86_URL=$(jq -r '.assets[] | select(.name | test("x86_64.*\\.zip")) | .browser_download_url' release.json)
-          A53_URL=$(jq -r '.assets[] | select(.name | test("aarch64.*\\.zip")) | .browser_download_url' release.json)
-          LUCI_URLS=$(jq -r '.assets[] | select(.name | test("luci-.*passwall.*\\.ipk")) | .browser_download_url' release.json)
+          X86_URL=$(jq -r '.assets // [] | .[] | select(.name | test("x86_64.*\\.zip")) | .browser_download_url' release.json)
+          A53_URL=$(jq -r '.assets // [] | .[] | select(.name | test("aarch64.*\\.zip")) | .browser_download_url' release.json)
+          LUCI_URLS=$(jq -r '.assets // [] | .[] | select(.name | test("luci-.*passwall.*\\.ipk")) | .browser_download_url' release.json)
       
           echo "X86_URL=$X86_URL"
           echo "A53_URL=$A53_URL"
@@ -58,6 +64,7 @@ jobs:
           for url in $LUCI_URLS; do
             curl -L -O "$url"
           done
+
 
       
       - name: Organize files for x86_64
