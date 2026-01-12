@@ -1,9 +1,8 @@
 #=================================================
 # https://github.com/wukongdaily/RunFilesBuilder
-# Description: Build RunFiles using GitHub Actions
-# Lisence: MIT
+# Description: Build Passwall RunFiles using GitHub Actions
+# License: MIT
 # Author: wukongdaily
-# Blog: wkdaily.cpolar.cn
 #=================================================
 
 name: Make Passwall run files
@@ -12,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # 需要创建 release
 
 jobs:
   build:
@@ -21,115 +20,141 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-      
-      - name: Fetch latest release tag from Passwall
-        id: fetch_latest_tag
-        run: |
-          latest_tag=$(curl -s https://api.github.com/repos/xiaorouji/openwrt-passwall/releases/latest | jq -r '.tag_name')
-          echo "LATEST_TAG=$latest_tag" >> $GITHUB_ENV
 
+      # -------------------------------------------------
+      # 获取 Passwall 最新 tag（不用 GitHub API，避免权限/限流）
+      # -------------------------------------------------
+      - name: Fetch latest Passwall tag
+        run: |
+          set -e
+          LATEST_TAG=$(git ls-remote --tags https://github.com/xiaorouji/openwrt-passwall.git \
+            | awk -F/ '{print $NF}' \
+            | grep -v '{}' \
+            | sort -V \
+            | tail -1)
+
+          echo "LATEST_TAG=$LATEST_TAG"
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+
+      # -------------------------------------------------
+      # 克隆 makeself
+      # -------------------------------------------------
       - name: Clone makeself repository
         run: git clone https://github.com/megastep/makeself.git
 
-      - name: Debug GitHub release API
+      # -------------------------------------------------
+      # 下载 Passwall 依赖（使用 latest/download 直链 + 重命名）
+      # -------------------------------------------------
+      - name: Download latest Passwall files
         run: |
           set -e
-      
-          API="https://api.github.com/repos/xiaorouji/openwrt-passwall/releases/latest"
-      
-          echo "=== Curl without auth ==="
-          curl -i "$API" || true
-      
-          echo
-          echo "=== Curl with GITHUB_TOKEN ==="
-          curl -i \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            "$API" || true
-      
+          mkdir -p downloads
+          cd downloads
+
+          echo "Downloading Passwall packages..."
+
+          # x86_64
+          curl -L \
+            https://github.com/xiaorouji/openwrt-passwall/releases/latest/download/passwall_packages_ipk_x86_64.zip \
+            -o passwall_x86_64.zip
+
+          # aarch64 cortex-a53
+          curl -L \
+            https://github.com/xiaorouji/openwrt-passwall/releases/latest/download/passwall_packages_ipk_aarch64_cortex-a53.zip \
+            -o passwall_aarch64.zip
+
+          # luci 主包
+          curl -L \
+            https://github.com/xiaorouji/openwrt-passwall/releases/latest/download/luci-app-passwall.ipk \
+            -o luci-app-passwall.ipk || true
+
+          # luci 中文包（可能不存在，允许失败）
+          curl -L \
+            https://github.com/xiaorouji/openwrt-passwall/releases/latest/download/luci-i18n-passwall-zh-cn.ipk \
+            -o luci-i18n-passwall-zh-cn.ipk || true
+
+          echo "Downloaded files:"
+          ls -lh
+
+      # -------------------------------------------------
+      # 整理 x86_64
+      # -------------------------------------------------
       - name: Organize files for x86_64
         run: |
+          set -e
           mkdir -p passwall_x86_64/depends passwall_x86_64/main
-          unzip downloads/passwall_packages_ipk_x86_64.zip -d passwall_x86_64/depends
-          rm downloads/passwall_packages_ipk_x86_64.zip
-          cp downloads/luci-*.ipk passwall_x86_64/main/
+          unzip downloads/passwall_x86_64.zip -d passwall_x86_64/depends
+          cp downloads/luci-*.ipk passwall_x86_64/main/ || true
 
+      # -------------------------------------------------
+      # 整理 aarch64
+      # -------------------------------------------------
       - name: Organize files for aarch64_cortex-a53
         run: |
+          set -e
           mkdir -p passwall_aarch64/depends passwall_aarch64/main
-          unzip downloads/passwall_packages_ipk_aarch64_cortex-a53.zip -d passwall_aarch64/depends
-          rm downloads/passwall_packages_ipk_aarch64_cortex-a53.zip
-          cp downloads/luci-*.ipk passwall_aarch64/main/
+          unzip downloads/passwall_aarch64.zip -d passwall_aarch64/depends
+          cp downloads/luci-*.ipk passwall_aarch64/main/ || true
 
+      # -------------------------------------------------
+      # 生成 install.sh
+      # -------------------------------------------------
       - name: Create install.sh scripts
         run: |
-          cat <<EOF > passwall_x86_64/install.sh
+          cat <<'EOF' > passwall_x86_64/install.sh
           #!/bin/sh
+          set -e
           opkg update
-          if [ $? -ne 0 ]; then
-              echo "update failed。"
-              exit 1
-          fi
-          opkg install iptables-mod-tproxy
-          opkg install iptables-mod-socket
-          opkg install iptables-mod-iprange
-          opkg install iptables-mod-conntrack-extra
+          opkg install iptables-mod-tproxy \
+                       iptables-mod-socket \
+                       iptables-mod-iprange \
+                       iptables-mod-conntrack-extra
           opkg install depends/*.ipk
           opkg install main/*.ipk
           EOF
+
           chmod +x passwall_x86_64/install.sh
           cp passwall_x86_64/install.sh passwall_aarch64/install.sh
 
+      # -------------------------------------------------
+      # 移动到 makeself
+      # -------------------------------------------------
       - name: Move passwall directories to makeself
         run: |
           mv passwall_x86_64 makeself/
           mv passwall_aarch64 makeself/
 
+      # -------------------------------------------------
+      # 生成 .run 文件
+      # -------------------------------------------------
       - name: Create self-extracting packages
         run: |
           cd makeself
-          ./makeself.sh passwall_x86_64/ passwall_x86_64_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
-          ./makeself.sh passwall_aarch64/ passwall_aarch64_a53_${{ env.LATEST_TAG }}.run "by github action" ./install.sh
+          ./makeself.sh passwall_x86_64 \
+            passwall_x86_64_${{ env.LATEST_TAG }}.run \
+            "Passwall installer (x86_64)" \
+            ./install.sh
 
+          ./makeself.sh passwall_aarch64 \
+            passwall_aarch64_a53_${{ env.LATEST_TAG }}.run \
+            "Passwall installer (aarch64 cortex-a53)" \
+            ./install.sh
+
+      # -------------------------------------------------
+      # 检查产物
+      # -------------------------------------------------
       - name: Check file sizes
         run: |
-          ls -lh makeself/passwall_*.run
+          ls -lh makeself/*.run
 
-      - name: Preparing release name
-        run: |
-          release_name=$(TZ="Asia/Shanghai" date +'%Y-%m-%d %H:%M Build')
-          echo "RELEASE_NAME=$release_name" >> $GITHUB_ENV
-
-      - name: Fetch latest release details
-        id: fetch_release_details
-        run: |
-          extra_content="![Github](https://img.shields.io/badge/Passwall.run-123456?logo=github&logoColor=fff&labelColor=green&style=for-the-badge) [![Github](https://img.shields.io/badge/国内加速站下载-FC7C0D?logo=github&logoColor=fff&labelColor=000&style=for-the-badge)](https://wkdaily.cpolar.cn/archives/1) ![GitHub Downloads (all assets, specific tag)](https://img.shields.io/github/downloads/wukongdaily/RunFilesBuilder/${{ env.LATEST_TAG }}/total?style=for-the-badge&labelColor=black&color=%2325c2a0)"
-          release_notes=$(curl -s https://api.github.com/repos/xiaorouji/openwrt-passwall/releases/latest | jq -r '.body')
-          if [ -z "$release_notes" ]; then
-            release_notes="No release notes available."
-          fi
-          echo -e "$extra_content\n\n$release_notes" > release_notes.md
-
-      - name: Print release notes
-        run: |
-          cat release_notes.md
-
-      - name: Generate new tag & release
-        uses: softprops/action-gh-release@master
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # -------------------------------------------------
+      # 创建 Release
+      # -------------------------------------------------
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.LATEST_TAG }}
-          target_commitish: ${{ github.ref_name }}
-          prerelease: false
-          body_path: release_notes.md
-
-      - name: Upload run files as release assets
-        uses: softprops/action-gh-release@v2.1.0
-        with:
-          tag_name: ${{ env.LATEST_TAG }}
-          name: "PassWall-${{ env.LATEST_TAG }}"
-          files: makeself/passwall_*.run
-          token: ${{ secrets.GITHUB_TOKEN }}
+          name: "Passwall ${{ env.LATEST_TAG }}"
+          files: makeself/*.run
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
