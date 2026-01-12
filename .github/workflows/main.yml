@@ -30,12 +30,34 @@ jobs:
 
       - name: Download latest Passwall files
         run: |
+          set -e
+          API="https://api.github.com/repos/xiaorouji/openwrt-passwall/releases/latest"
           mkdir -p downloads
           cd downloads
-          curl -LO $(curl -s https://api.github.com/repos/xiaorouji/openwrt-passwall/releases/latest | grep -oP '"browser_download_url":\s*".*passwall_packages_ipk_x86_64.zip"' | cut -d '"' -f 4)
-          curl -LO $(curl -s https://api.github.com/repos/xiaorouji/openwrt-passwall/releases/latest | grep -oP '"browser_download_url":\s*".*passwall_packages_ipk_aarch64_cortex-a53.zip"' | cut -d '"' -f 4)
-          curl -LO $(curl -s https://api.github.com/repos/xiaorouji/openwrt-passwall/releases/latest | grep -oP '"browser_download_url":\s*".*luci-.*-passwall.*\.ipk"' | head -1 | cut -d '"' -f 4)
-          curl -LO $(curl -s https://api.github.com/repos/xiaorouji/openwrt-passwall/releases/latest | grep -oP '"browser_download_url":\s*".*luci-.*-passwall.*\.ipk"' | tail -1 | cut -d '"' -f 4)
+          
+          echo "Fetching release metadata..."
+          curl -s "$API" > release.json
+      
+          echo "Available assets:"
+          jq -r '.assets[].name' release.json
+      
+          X86_URL=$(jq -r '.assets[] | select(.name | test("x86_64.*\\.zip")) | .browser_download_url' release.json)
+          A53_URL=$(jq -r '.assets[] | select(.name | test("aarch64.*\\.zip")) | .browser_download_url' release.json)
+          LUCI_URLS=$(jq -r '.assets[] | select(.name | test("luci-.*passwall.*\\.ipk")) | .browser_download_url' release.json)
+      
+          echo "X86_URL=$X86_URL"
+          echo "A53_URL=$A53_URL"
+          echo "LUCI_URLS=$LUCI_URLS"
+      
+          [ -z "$X86_URL" ] && echo "❌ x86_64 package not found" && exit 1
+          [ -z "$A53_URL" ] && echo "❌ aarch64 package not found" && exit 1
+      
+          curl -L -O "$X86_URL"
+          curl -L -O "$A53_URL"
+      
+          for url in $LUCI_URLS; do
+            curl -L -O "$url"
+          done
 
       
       - name: Organize files for x86_64
